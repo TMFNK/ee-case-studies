@@ -155,31 +155,58 @@ def parse_case_study(html: str, url: str) -> Optional[dict]:
 
     # ── Date ──
     date = ""
-    # Try <meta> tag with article:published_time first
-    meta_tag = soup.find("meta", attrs={"property": "article:published_time"})
-    if meta_tag and meta_tag.get("content"):
-        date = meta_tag["content"][:10]  # YYYY-MM-DD
-    else:
-        # Try <time> tag
+    # Try JSON-LD schema (Yoast SEO) first — most reliable on this site
+    for script in soup.find_all("script", type="application/ld+json"):
+        try:
+            data = json.loads(script.string)
+            # Handle @graph structure (standard Yoast output)
+            if isinstance(data, dict) and "@graph" in data:
+                for item in data["@graph"]:
+                    if isinstance(item, dict) and item.get("@type") == "WebPage":
+                        dp = item.get("datePublished", "")
+                        if dp:
+                            date = dp[:10]
+                            break
+        except (json.JSONDecodeError, AttributeError):
+            pass
+        if date:
+            break
+    # Fallback to <meta> tag
+    if not date:
+        meta_tag = soup.find("meta", attrs={"property": "article:published_time"})
+        if meta_tag and meta_tag.get("content"):
+            date = meta_tag["content"][:10]
+    # Fallback to <time> tag
+    if not date:
         time_tag = soup.find("time")
         if time_tag and time_tag.get("datetime"):
             date = time_tag["datetime"][:10]
-        else:
-            # Try .entry-date class
-            date_tag = soup.select_one(".entry-date")
-            if date_tag and date_tag.get("datetime"):
-                date = date_tag["datetime"][:10]
+    # Fallback to .entry-date class
+    if not date:
+        date_tag = soup.select_one(".entry-date")
+        if date_tag and date_tag.get("datetime"):
+            date = date_tag["datetime"][:10]
 
     # ── Categories / Tags ──
     categories: list[str] = []
-    for selector in [".cat-links a", ".post-tags a", ".category-links a", ".tags-links a"]:
-        tags = soup.select(selector)
-        for tag in tags:
-            text = tag.get_text(strip=True)
-            if text and text not in categories:
-                categories.append(text)
-        if categories:
-            break
+    # Try icon cards (industry label) — primary on this site
+    for title_tag in soup.find_all("div", class_="icon-card__item-title"):
+        if title_tag.get_text(strip=True) == "Industry":
+            value_tag = title_tag.find_next_sibling("div", class_="icon-card__item-value")
+            if value_tag:
+                industry = value_tag.get_text(strip=True)
+                if industry and industry not in categories:
+                    categories.append(industry)
+    # Fallback to WordPress taxonomy links
+    if not categories:
+        for selector in [".cat-links a", ".post-tags a", ".category-links a", ".tags-links a"]:
+            tags = soup.select(selector)
+            for tag in tags:
+                text = tag.get_text(strip=True)
+                if text and text not in categories:
+                    categories.append(text)
+            if categories:
+                break
 
     # Validate: we need at least a title and some content
     if not title or not content:
