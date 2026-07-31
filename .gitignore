@@ -24,6 +24,7 @@ env/
 *.swp
 *.swo
 *~
+.cursor
 
 # OS
 .DS_Store
