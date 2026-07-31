@@ -5,11 +5,14 @@
 #   Embedding server:8081  bge-m3                 (/v1/embeddings, 1024-dim)
 #   Extract server  :8082  LFM2-350M-Extract      (entity/relation extraction)
 #
-# LightRAG has no native llama.cpp binding, so it talks to these over the
-# OpenAI-compatible REST API using the `openai` binding. See .env.example.
+# On 8GB Apple Silicon, do NOT run all three at once — they OOM under load.
+# Prefer phased modes:
+#   scripts/start_servers.sh start ingest   # extract + embed (for ingest.py)
+#   scripts/start_servers.sh start query    # llm + embed (for query.py)
+#   scripts/start_servers.sh start all      # all three (16GB+ machines)
 #
 # Usage:
-#   scripts/start_servers.sh [start|stop|status]   (default: start)
+#   scripts/start_servers.sh [start [ingest|query|all]|stop|status]
 set -euo pipefail
 
 LLAMA_SERVER="${LLAMA_SERVER:-/opt/homebrew/opt/llama.cpp/bin/llama-server}"
@@ -67,13 +70,17 @@ start_one() {
     echo "${name} already running (pid $(cat "${pidfile}"), port ${port})"
     return 0
   fi
+  # Stale pid file from a previous OOM kill
+  rm -f "${pidfile}"
   echo "starting ${name} on :${port} (alias=${alias})"
+  # -np 1 keeps KV-cache small on 8GB machines.
   nohup "${LLAMA_SERVER}" \
     --model "${model}" \
     --alias "${alias}" \
     --host 127.0.0.1 \
     --port "${port}" \
     -ngl 999 \
+    -np 1 \
     "$@" >"${log}" 2>&1 &
   echo $! >"${pidfile}"
 }
@@ -120,21 +127,69 @@ wait_ready() {
   return 1
 }
 
-case "${1:-start}" in
+start_llm() {
+  start_one "llm" "${LLM_PORT}" "${LLM_ALIAS}" "${LLM_MODEL}" \
+    "${LOG_DIR}/llm-server.log" "${LOG_DIR}/llm-server.pid" \
+    --ctx-size 4096
+}
+
+start_embed() {
+  # CHUNK_SIZE defaults to 1200; llama-server defaults -ub to 512 and, in
+  # embedding mode, clamps -b down to match — so long chunks get
+  # "input too large to process". Keep -b/-ub >= --ctx-size.
+  start_one "bge-m3" "${EMBED_PORT}" "${EMBED_ALIAS}" "${EMBED_MODEL}" \
+    "${LOG_DIR}/bge-m3.log" "${LOG_DIR}/bge-m3.pid" \
+    --embedding --pooling mean --ctx-size 2048 -b 2048 -ub 2048
+}
+
+start_extract() {
+  # Extraction prompts are chunk (~CHUNK_SIZE) + a large LightRAG JSON template.
+  # Seen overflows at 8192 (~8624 prompt tokens); 16384 is the safe floor.
+  start_one "extract" "${EXTRACT_PORT}" "${EXTRACT_ALIAS}" "${EXTRACT_MODEL}" \
+    "${LOG_DIR}/extract-server.log" "${LOG_DIR}/extract-server.pid" \
+    --ctx-size 16384
+}
+
+cmd="${1:-start}"
+mode="${2:-ingest}"
+
+case "${cmd}" in
   start)
-    start_one "llm" "${LLM_PORT}" "${LLM_ALIAS}" "${LLM_MODEL}" \
-      "${LOG_DIR}/llm-server.log" "${LOG_DIR}/llm-server.pid" \
-      --ctx-size 8192
-    start_one "bge-m3" "${EMBED_PORT}" "${EMBED_ALIAS}" "${EMBED_MODEL}" \
-      "${LOG_DIR}/bge-m3.log" "${LOG_DIR}/bge-m3.pid" \
-      --embedding --pooling mean
-    start_one "extract" "${EXTRACT_PORT}" "${EXTRACT_ALIAS}" "${EXTRACT_MODEL}" \
-      "${LOG_DIR}/extract-server.log" "${LOG_DIR}/extract-server.pid" \
-      --ctx-size 8192
-    echo "waiting for servers to load models..."
-    wait_ready "llm" "${LLM_PORT}" "${LOG_DIR}/llm-server.log" || true
-    wait_ready "bge-m3" "${EMBED_PORT}" "${LOG_DIR}/bge-m3.log" || true
-    wait_ready "extract" "${EXTRACT_PORT}" "${LOG_DIR}/extract-server.log" || true
+    case "${mode}" in
+      ingest)
+        # Extract + embed only — fits 8GB Air. Query LLM not needed for ingest.
+        echo "mode=ingest (extract :${EXTRACT_PORT} + embed :${EMBED_PORT})"
+        stop_one "llm" "${LOG_DIR}/llm-server.pid"
+        start_embed
+        start_extract
+        echo "waiting for servers to load models..."
+        wait_ready "bge-m3" "${EMBED_PORT}" "${LOG_DIR}/bge-m3.log" || true
+        wait_ready "extract" "${EXTRACT_PORT}" "${LOG_DIR}/extract-server.log" || true
+        ;;
+      query)
+        echo "mode=query (llm :${LLM_PORT} + embed :${EMBED_PORT})"
+        stop_one "extract" "${LOG_DIR}/extract-server.pid"
+        start_llm
+        start_embed
+        echo "waiting for servers to load models..."
+        wait_ready "llm" "${LLM_PORT}" "${LOG_DIR}/llm-server.log" || true
+        wait_ready "bge-m3" "${EMBED_PORT}" "${LOG_DIR}/bge-m3.log" || true
+        ;;
+      all)
+        echo "mode=all (warning: may OOM on 8GB machines)"
+        start_llm
+        start_embed
+        start_extract
+        echo "waiting for servers to load models..."
+        wait_ready "llm" "${LLM_PORT}" "${LOG_DIR}/llm-server.log" || true
+        wait_ready "bge-m3" "${EMBED_PORT}" "${LOG_DIR}/bge-m3.log" || true
+        wait_ready "extract" "${EXTRACT_PORT}" "${LOG_DIR}/extract-server.log" || true
+        ;;
+      *)
+        echo "usage: $0 start [ingest|query|all]" >&2
+        exit 1
+        ;;
+    esac
     ;;
   stop)
     stop_one "llm" "${LOG_DIR}/llm-server.pid"
@@ -145,7 +200,7 @@ case "${1:-start}" in
     status
     ;;
   *)
-    echo "usage: $0 [start|stop|status]" >&2
+    echo "usage: $0 [start [ingest|query|all]|stop|status]" >&2
     exit 1
     ;;
 esac
