@@ -5,7 +5,7 @@
 #   Embedding server:8081  bge-m3                 (/v1/embeddings, 1024-dim)
 #   Extract server  :8082  LFM2-350M-Extract      (entity/relation extraction)
 #
-# On 8GB Apple Silicon, do NOT run all three at once — they OOM under load.
+# On 8GB Apple Silicon, do NOT run all three at once - they OOM under load.
 # Prefer phased modes:
 #   scripts/start_servers.sh start ingest   # extract + embed (for ingest.py)
 #   scripts/start_servers.sh start query    # llm + embed (for query.py)
@@ -123,7 +123,7 @@ wait_ready() {
     fi
     sleep 2
   done
-  echo "${name} still loading — check ${log}" >&2
+  echo "${name} still loading - check ${log}" >&2
   return 1
 }
 
@@ -135,7 +135,7 @@ start_llm() {
 
 start_embed() {
   # CHUNK_SIZE defaults to 1200; llama-server defaults -ub to 512 and, in
-  # embedding mode, clamps -b down to match — so long chunks get
+  # embedding mode, clamps -b down to match - so long chunks get
   # "input too large to process". Keep -b/-ub >= --ctx-size.
   start_one "bge-m3" "${EMBED_PORT}" "${EMBED_ALIAS}" "${EMBED_MODEL}" \
     "${LOG_DIR}/bge-m3.log" "${LOG_DIR}/bge-m3.pid" \
@@ -157,7 +157,7 @@ case "${cmd}" in
   start)
     case "${mode}" in
       ingest)
-        # Extract + embed only — fits 8GB Air. Query LLM not needed for ingest.
+        # Extract + embed only - fits 8GB Air. Query LLM not needed for ingest.
         echo "mode=ingest (extract :${EXTRACT_PORT} + embed :${EMBED_PORT})"
         stop_one "llm" "${LOG_DIR}/llm-server.pid"
         start_embed

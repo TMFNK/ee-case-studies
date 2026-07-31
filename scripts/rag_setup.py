@@ -1,4 +1,13 @@
-"""Shared LightRAG construction from .env for ingest.py / query.py."""
+"""Shared LightRAG construction from .env for ingest.py / query.py.
+
+Tuned for local llama.cpp on 8GB Apple Silicon:
+
+- ``ENTITY_EXTRACTION_USE_JSON`` + field-name normalizer for LFM2-Extract
+- ``MAX_GLEANING=0`` to avoid extract context overflow
+- ``EMBEDDING_TOKEN_LIMIT`` matched to bge-m3 ``-ub`` / ``--ctx-size``
+- one-text-at-a-time embeddings so llama-server does not sum batch tokens
+- ingest-mode fallback: if query LLM (:8080) is down, use extract (:8082)
+"""
 
 from __future__ import annotations
 
@@ -89,9 +98,11 @@ def _normalize_extract_json(text: str) -> str:
     except json.JSONDecodeError:
         try:
             import json_repair
-
+        except ImportError:
+            return text
+        try:
             parsed = json_repair.loads(stripped)
-        except Exception:
+        except (ValueError, TypeError, json.JSONDecodeError):
             return text
 
     if isinstance(parsed, list):
@@ -202,7 +213,7 @@ def build_rag(working_dir: str | Path | None = None) -> LightRAG:
 
     if not _host_up(embed_host):
         raise SystemExit(
-            f"embedding server not reachable at {embed_host} — "
+            f"embedding server not reachable at {embed_host} - "
             f"run: scripts/start_servers.sh start ingest"
         )
 

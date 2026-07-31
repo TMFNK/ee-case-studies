@@ -1,4 +1,9 @@
-"""Interactive CLI for querying the LightRAG knowledge base."""
+"""Interactive CLI for querying the LightRAG knowledge base.
+
+On 8GB machines start servers with::
+
+    scripts/start_servers.sh start query
+"""
 
 from __future__ import annotations
 

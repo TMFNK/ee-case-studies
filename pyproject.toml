@@ -1,7 +1,7 @@
 [project]
 name = "ee-case-studies"
 version = "0.1.0"
-description = "Equal Experts case studies scraped and indexed with LightRAG graph-based RAG"
+description = "Equal Experts case studies: fully local LightRAG + llama.cpp (ingest/query phased for 8GB)"
 readme = "README.md"
 license = { text = "AGPL-3.0-only" }
 requires-python = ">=3.12"
@@ -23,7 +23,7 @@ dev = [
 # importable package), so uv sync installs dependencies without building us.
 
 [tool.hatch.build.targets.wheel]
-packages = ["scripts/", "data/", "eval/", "docs/"]
+packages = ["scripts/", "data/", "eval/"]
 
 [tool.ruff]
 line-length = 88

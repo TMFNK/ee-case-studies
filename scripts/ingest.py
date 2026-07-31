@@ -1,4 +1,10 @@
-"""Ingest scraped Equal Experts case studies into LightRAG."""
+"""Ingest scraped Equal Experts case studies into LightRAG.
+
+Resumable: re-run without deleting ``rag_storage/`` to skip completed docs and
+retry failed ones. On 8GB machines start servers with::
+
+    scripts/start_servers.sh start ingest
+"""
 
 from __future__ import annotations
 
