@@ -32,6 +32,8 @@ Thumbs.db
 # LightRAG storage
 lightrag_storage/
 storage/
+rag_storage/
+inputs/
 
 # Ollama models (if stored locally)
 ollama_models/

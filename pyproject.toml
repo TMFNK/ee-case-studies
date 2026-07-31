@@ -19,9 +19,8 @@ dev = [
     "ruff>=0.5.0",
 ]
 
-[build-system]
-requires = ["hatchling"]
-build-backend = "hatchling.build"
+# No [build-system]: this is a uv "virtual project" (scripts + config, no
+# importable package), so uv sync installs dependencies without building us.
 
 [tool.hatch.build.targets.wheel]
 packages = ["scripts/", "data/", "eval/", "docs/"]

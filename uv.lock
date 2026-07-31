@@ -578,13 +578,20 @@ wheels = [
 [[package]]
 name = "ee-case-studies"
 version = "0.1.0"
+<<<<<<< HEAD
 source = { editable = "." }
+=======
+source = { virtual = "." }
+>>>>>>> a1cebcb (Refactor code structure for improved readability and maintainability)
 dependencies = [
     { name = "beautifulsoup4" },
     { name = "lightrag-hku", extra = ["api"] },
     { name = "lxml" },
     { name = "requests" },
+<<<<<<< HEAD
     { name = "tqdm" },
+=======
+>>>>>>> a1cebcb (Refactor code structure for improved readability and maintainability)
 ]
 
 [package.optional-dependencies]
@@ -601,7 +608,10 @@ requires-dist = [
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0.0" },
     { name = "requests", specifier = ">=2.32.0" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.5.0" },
+<<<<<<< HEAD
     { name = "tqdm", specifier = ">=4.66.0" },
+=======
+>>>>>>> a1cebcb (Refactor code structure for improved readability and maintainability)
 ]
 provides-extras = ["dev"]
 
