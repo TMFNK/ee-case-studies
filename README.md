@@ -1,37 +1,35 @@
 # EE Case Studies — LightRAG
 
-Graph-based RAG pipeline over Equal Experts case studies, built with [LightRAG](https://github.com/HKUDS/LightRAG) and local LLMs via Ollama. Everything runs on your machine — no API keys, no cloud services.
+Graph-based RAG pipeline over Equal Experts case studies, built with [LightRAG](https://github.com/HKUDS/LightRAG) and local LLMs via `llama.cpp` (`llama-server`). Everything runs on your machine — no API keys, no cloud services.
+
+**Hard constraint:** fully local only. No Ollama, no cloud APIs. Every model runs through `llama.cpp` on Apple Silicon Metal.
 
 ## What This Does
 
-- Scrapes all case studies from [equalexperts.com/case-studies](https://www.equalexperts.com/case-studies/) (118 total)
+- Scrapes all case studies from [equalexperts.com](https://www.equalexperts.com/case-studies/) (118 total)
 - Indexes them into a LightRAG knowledge graph — entities, relationships, and vector embeddings
 - Provides a query interface with 5 retrieval modes: local, global, hybrid, naive, mix
 - Ships with an evaluation harness to measure retrieval quality across query types
 
 ## Tech Stack
 
-| Component       | Choice                                |
-| --------------- | ------------------------------------- |
-| RAG framework   | LightRAG (`lightrag-hku[api]`)        |
-| LLM             | Ollama `llama3.2`                     |
-| Embeddings      | Ollama `nomic-embed-text` (768-dim)   |
-| Scraper         | `requests` + `BeautifulSoup` + `lxml` |
-| Python          | 3.12+                                 |
-| Package manager | `uv`                                  |
-| Linter          | `ruff`                                |
-| Test runner     | `pytest`                              |
+| Component       | Choice                                              |
+| --------------- | --------------------------------------------------- |
+| RAG framework   | LightRAG (`lightrag-hku[api]`)                      |
+| LLM             | `llama.cpp` `LFM2.5-1.2B-Thinking` (Q4_K_M)        |
+| Embeddings      | `llama.cpp` `bge-m3` (Q8_0, 1024-dim)               |
+| Scraper         | `requests` + `BeautifulSoup` + `lxml`               |
+| Python          | 3.12+                                               |
+| Package manager | `uv`                                                |
+| Linter          | `ruff`                                              |
+| Test runner     | `pytest`                                            |
 
 ## Prerequisites
 
 1. **Python 3.12+** — check with `python3 --version`
 2. **uv** — install with `pip install uv` or follow [the official guide](https://docs.astral.sh/uv/)
-3. **Ollama** — install from [ollama.com](https://ollama.com), then pull the models:
-
-```bash
-ollama pull llama3.2
-ollama pull nomic-embed-text
-```
+3. **llama.cpp** — installed via Homebrew: `brew install llama.cpp`
+4. **Local GGUF models** on disk (see [Models](#models) below)
 
 ## Quick Start
 
@@ -45,18 +43,47 @@ uv sync
 
 # 3. Configure environment
 cp .env.example .env
-# Edit .env if you need different models or ports
+# Edit .env if you need different model paths or ports
 
-# 4. Scrape case studies
+# 4. Start the two llama.cpp servers (one terminal each, or background)
+# LLM server on port 8080:
+llama-server \
+  --model /path/to/LFM2.5-1.2B-Thinking-Q4_K_M.gguf \
+  --model-alias lfm2.5-1.2b-thinking \
+  --port 8080 -ngl 999
+
+# Embedding server on port 8081:
+llama-server \
+  --model /path/to/bge-m3-Q8_0.gguf \
+  --model-alias bge-m3 \
+  --embedding --pooling mean \
+  --port 8081 -ngl 999
+
+# 5. Verify both servers respond
+curl http://localhost:8080/v1/models
+curl http://localhost:8081/v1/models
+
+# 6. Scrape case studies
 uv run python scripts/scrape_case_studies.py
 
-# 5. Ingest into LightRAG
+# 7. Ingest into LightRAG
 uv run python scripts/ingest.py
 
-# 6. Query
+# 8. Query
 uv run python scripts/query.py
 # Or open the LightRAG web UI at http://localhost:9621
 ```
+
+## Models
+
+All models are stored locally as GGUF files. The plan uses these:
+
+| Role                     | Model                    | File                      | Size   | Path                                                                                                              |
+| ------------------------ | ------------------------ | ------------------------- | ------ | ----------------------------------------------------------------------------------------------------------------- |
+| LLM (extract + generate) | LFM2.5-1.2B-Thinking     | `LFM2.5-1.2B-Thinking-Q4_K_M.gguf`  | 697 MB | `~/.cache/huggingface/hub/models--LiquidAI--LFM2.5-1.2B-Thinking-GGUF/snapshots/<rev>/...`   |
+| Embedding                | bge-m3                   | `bge-m3-Q8_0.gguf`        | 605 MB | `~/.cache/huggingface/hub/models--gpustack--bge-m3-GGUF/snapshots/<rev>/...`                  |
+
+Resolve the actual snapshot paths with `readlink -f` if needed.
 
 ## Configuration
 
@@ -64,27 +91,22 @@ All configuration lives in `.env` (copied from `.env.example`). Key options:
 
 ### LLM
 
-| Variable           | Default                  | Description                            |
-| ------------------ | ------------------------ | -------------------------------------- |
-| `LLM_BINDING`      | `ollama`                 | LLM backend                            |
-| `LLM_BINDING_HOST` | `http://localhost:11434` | Ollama server URL                      |
-| `LLM_MODEL`        | `llama3.2`               | Model used for extraction and querying |
-| `EXTRACT_MODEL`    | —                        | Override model for entity extraction   |
-| `QUERY_MODEL`      | —                        | Override model for query responses     |
-| `KEYWORD_MODEL`    | —                        | Override model for keyword extraction  |
+| Variable               | Default                        | Description                            |
+| ---------------------- | ------------------------------ | -------------------------------------- |
+| `LLM_BINDING`          | `openai`                       | LLM backend (use `openai` for llama.cpp) |
+| `LLM_BINDING_HOST`     | `http://localhost:8080/v1`      | `llama-server` LLM URL                 |
+| `LLM_MODEL`            | `lfm2.5-1.2b-thinking`         | Model name (must match `--model-alias`) |
+| `LLM_BINDING_API_KEY`  | `sk-no-key-needed`             | Dummy key (required by LightRAG, ignored by llama.cpp) |
 
 ### Embeddings
 
-| Variable                 | Default                  | Description              |
-| ------------------------ | ------------------------ | ------------------------ |
-| `EMBEDDING_BINDING`      | `ollama`                 | Embedding backend        |
-| `EMBEDDING_BINDING_HOST` | `http://localhost:11434` | Ollama server URL        |
-| `EMBEDDING_MODEL`        | `nomic-embed-text`       | Embedding model          |
-| `EMBEDDING_DIM`          | `768`                    | Embedding dimensionality |
-
-### Reranker (optional)
-
-Uncomment the `RERANK_BINDING` and `RERANK_MODEL` lines to enable `bge-reranker-v2-m3` for improved mixed-query quality.
+| Variable                   | Default                        | Description                                |
+| -------------------------- | ------------------------------ | ------------------------------------------ |
+| `EMBEDDING_BINDING`        | `openai`                       | Embedding backend                          |
+| `EMBEDDING_BINDING_HOST`   | `http://localhost:8081/v1`      | `llama-server` embedding URL               |
+| `EMBEDDING_MODEL`          | `bge-m3`                       | Embedding model name                       |
+| `EMBEDDING_BINDING_API_KEY`| `sk-no-key-needed`             | Dummy key                                  |
+| `EMBEDDING_DIM`            | `1024`                         | Embedding dimensionality (bge-m3 output)   |
 
 ### Storage
 
@@ -106,6 +128,34 @@ Default is in-memory with local file persistence. For production, uncomment the 
 | `CHUNK_OVERLAP` | `100`       | Overlap between chunks                                   |
 | `CHUNK_METHOD`  | `paragraph` | Strategy: `fixed`, `recursive`, `vector`, or `paragraph` |
 
+### Ingest Tuning
+
+| Variable                       | Default | Description                                                        |
+| ------------------------------ | ------- | ------------------------------------------------------------------ |
+| `MAX_PARALLEL_INSERT`          | `4`     | Parallel extraction workers (main speed lever for local LLMs)      |
+| `ENABLE_LLM_CACHE_FOR_EXTRACT` | `true`  | Cache extraction results so re-runs are incremental and fast       |
+
+## Scraper
+
+```bash
+# Full scrape (118 case studies)
+uv run python scripts/scrape_case_studies.py
+
+# Test on a subset
+uv run python scripts/scrape_case_studies.py --limit 5
+
+# Custom concurrency
+uv run python scripts/scrape_case_studies.py --concurrency 4
+
+# Custom output directory
+uv run python scripts/scrape_case_studies.py --output my_data
+```
+
+Output:
+- `data/case_studies.jsonl` — incremental, one JSON object per line
+- `data/case_studies.json` — final array sorted by sitemap order
+- `data/scrape-errors.log` — logs of any URLs that failed after retries
+
 ## Retrieval Modes
 
 | Mode     | What it does                                     | Best for                                        |
@@ -121,17 +171,19 @@ Default is in-memory with local file persistence. For production, uncomment the 
 ```tree
 ee-case-studies/
 ├── data/
-│   └── case_studies.json        # Scraped case studies
+│   ├── case_studies.json        # Scraped case studies (118)
+│   └── case_studies.jsonl       # Incremental scrape backup
 ├── scripts/
-│   ├── scrape_case_studies.py   # Scraper
+│   ├── scrape_case_studies.py   # Concurrent scraper
 │   ├── ingest.py                # LightRAG ingestion
 │   └── query.py                 # Query CLI
 ├── eval/
-│   ├── cases.py                 # Eval cases
+│   ├── cases.py                 # Eval cases (reused from assignment)
 │   └── run_eval.py              # Evaluation runner
 ├── tests/                       # pytest tests
 ├── docs/                        # Documentation
-├── .env.example                 # LightRAG config template
+│   └── EVALUATION.md            # Results comparison
+├── .env.example                 # LightRAG config template (llama.cpp)
 ├── pyproject.toml               # Project metadata and dependencies
 └── README.md
 ```
