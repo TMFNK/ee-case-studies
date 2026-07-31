@@ -26,7 +26,7 @@ USAGE:
     uv run python scripts/scrape_case_studies.py
     uv run python scripts/scrape_case_studies.py --limit 5    # test on a subset
     uv run python scripts/scrape_case_studies.py --concurrency 4  # slower, more polite
-    uv run python scripts/scrape_case_studies.py --output my_data/cases.json  # custom output
+    uv run python scripts/scrape_case_studies.py --output my_data  # custom output directory
 
 OUTPUT:
 - data/case_studies.jsonl — incremental, one JSON object per line
@@ -42,27 +42,26 @@ DEPENDENCIES:
 TROUBLESHOOTING:
 - If you get SSL errors, check your network connection
 - If a page fails to parse, check scrape-errors.log
-- The scraper is designed to be idempotent — re-running it overwrites output files
+- Re-running resets JSONL / error log and overwrites the final JSON
 - Rate limiting: if you get 429 responses, lower concurrency with --concurrency 2
 """
 
 import argparse
 import json
 import logging
-import os
 import random
+import threading
 import time
 import xml.etree.ElementTree as ET
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
 import requests
 from bs4 import BeautifulSoup
 from requests.adapters import HTTPAdapter
-from requests.packages.urllib3.util.retry import Retry
 from tqdm import tqdm
+from urllib3.util.retry import Retry
 
 # ── Constants ──────────────────────────────────────────────────────────────────
 
@@ -222,19 +221,47 @@ def parse_case_study(html: str, url: str) -> Optional[dict]:
     }
 
 
+# ── HTTP Session Helpers ───────────────────────────────────────────────────────
+
+
+def make_session(concurrency: int) -> requests.Session:
+    """Build a requests Session with pooling + retries."""
+    session = requests.Session()
+    session.headers.update({"User-Agent": USER_AGENT})
+    retry_strategy = Retry(
+        total=3,
+        backoff_factor=0.5,
+        status_forcelist=[429, 500, 502, 503, 504],
+        allowed_methods=["GET"],
+    )
+    adapter = HTTPAdapter(
+        pool_connections=concurrency,
+        pool_maxsize=concurrency + 2,
+        max_retries=retry_strategy,
+    )
+    session.mount("https://", adapter)
+    session.mount("http://", adapter)
+    return session
+
+
 # ── Fetch + Parse One URL ──────────────────────────────────────────────────────
 
 
 def fetch_and_parse(
     url: str,
     case_id: int,
-    session: requests.Session,
+    thread_sessions: threading.local,
+    concurrency: int,
 ) -> tuple[int, Optional[dict]]:
     """Fetch a single case study URL and parse it.
 
     Returns (case_id, parsed_dict_or_None) so the caller can track order.
-    Adds a small random jitter between requests to stay polite.
+    Uses a per-thread Session (requests.Session is not thread-safe).
     """
+    if not getattr(thread_sessions, "session", None):
+        thread_sessions.session = make_session(concurrency)
+    session = thread_sessions.session
+
     time.sleep(random.uniform(0.1, 0.3))  # Polite jitter
     try:
         resp = session.get(url, timeout=30)
@@ -264,37 +291,29 @@ def scrape(
     json_path = output_path / "case_studies.json"
     error_log_path = output_path / "scrape-errors.log"
 
-    # Set up a session with connection pooling and retries
-    session = requests.Session()
-    session.headers.update({"User-Agent": USER_AGENT})
+    # Reset incremental outputs so re-runs are idempotent
+    jsonl_path.write_text("", encoding="utf-8")
+    error_log_path.write_text("", encoding="utf-8")
 
-    retry_strategy = Retry(
-        total=3,
-        backoff_factor=0.5,
-        status_forcelist=[429, 500, 502, 503, 504],
-        allowed_methods=["GET"],
-    )
-    adapter = HTTPAdapter(
-        pool_connections=concurrency,
-        pool_maxsize=concurrency + 2,
-        max_retries=retry_strategy,
-    )
-    session.mount("https://", adapter)
-    session.mount("http://", adapter)
-
-    # Step 1: Fetch sitemap
-    all_urls = fetch_sitemap_urls(sitemap_url, session)
+    # Step 1: Fetch sitemap (single-threaded session is fine here)
+    sitemap_session = make_session(concurrency)
+    all_urls = fetch_sitemap_urls(sitemap_url, sitemap_session)
+    sitemap_session.close()
     if limit is not None:
         all_urls = all_urls[:limit]
         logger.info("Limited to first %d URLs", limit)
 
-    # Step 2: Fetch and parse concurrently
+    # Step 2: Fetch and parse concurrently (one Session per worker thread)
     results: list[Optional[dict]] = [None] * len(all_urls)
     error_count = 0
+    thread_sessions = threading.local()
+    jsonl_lock = threading.Lock()
 
     with ThreadPoolExecutor(max_workers=concurrency) as executor:
         futures = {
-            executor.submit(fetch_and_parse, url, idx, session): idx
+            executor.submit(
+                fetch_and_parse, url, idx, thread_sessions, concurrency
+            ): idx
             for idx, url in enumerate(all_urls)
         }
 
@@ -305,18 +324,21 @@ def scrape(
                     _, parsed = future.result()
                     results[idx] = parsed
                     if parsed is not None:
-                        # Write incrementally to JSONL
-                        with open(jsonl_path, "a", encoding="utf-8") as f:
-                            f.write(json.dumps(parsed, ensure_ascii=False) + "\n")
+                        line = json.dumps(parsed, ensure_ascii=False) + "\n"
+                        with jsonl_lock:
+                            with open(jsonl_path, "a", encoding="utf-8") as f:
+                                f.write(line)
                     else:
                         error_count += 1
-                        with open(error_log_path, "a", encoding="utf-8") as f:
-                            f.write(f"{all_urls[idx]}\n")
+                        with jsonl_lock:
+                            with open(error_log_path, "a", encoding="utf-8") as f:
+                                f.write(f"{all_urls[idx]}\n")
                 except Exception as exc:
                     logger.error("Unexpected error for URL %s: %s", all_urls[idx], exc)
                     error_count += 1
-                    with open(error_log_path, "a", encoding="utf-8") as f:
-                        f.write(f"{all_urls[idx]} — {exc}\n")
+                    with jsonl_lock:
+                        with open(error_log_path, "a", encoding="utf-8") as f:
+                            f.write(f"{all_urls[idx]} — {exc}\n")
                 pbar.update(1)
 
     # Step 3: Assemble final JSON array (sorted by sitemap order)
@@ -360,7 +382,10 @@ def main() -> None:
     parser.add_argument(
         "--output",
         default=DEFAULT_OUTPUT_DIR,
-        help=f"Output directory (default: {DEFAULT_OUTPUT_DIR})",
+        help=(
+            f"Output directory for case_studies.json / .jsonl "
+            f"(default: {DEFAULT_OUTPUT_DIR})"
+        ),
     )
     parser.add_argument(
         "--concurrency",
