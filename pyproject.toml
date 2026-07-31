@@ -1,0 +1,33 @@
+[project]
+name = "ee-case-studies"
+version = "0.1.0"
+description = "Equal Experts case studies scraped and indexed with LightRAG graph-based RAG"
+readme = "README.md"
+license = { text = "AGPL-3.0-only" }
+requires-python = ">=3.12"
+dependencies = [
+    "lightrag-hku[api]",
+    "requests>=2.32.0",
+    "beautifulsoup4>=4.12.0",
+    "lxml>=5.0.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0.0",
+    "ruff>=0.5.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.ruff]
+line-length = 88
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
